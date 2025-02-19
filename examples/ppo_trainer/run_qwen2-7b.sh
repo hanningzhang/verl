@@ -13,7 +13,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_batch_size=500 \
     data.max_prompt_length=1024 \
     data.max_response_length=3800 \
-    actor_rollout_ref.model.path=1231czx/qwen_self_corr_warmup2_clean_ep1 \
+    actor_rollout_ref.model.path=1231czx/qwen_self_corr_warmup_clean_ep1_new_temp \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
@@ -42,7 +42,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     critic.optim.lr=1e-5 \
     critic.model.use_remove_padding=True \
-    critic.model.path=Qwen/Qwen2.5-Math-7B \
+    critic.model.path=1231czx/qwen_self_corr_warmup_clean_ep1_new_temp \
     critic.model.enable_gradient_checkpointing=True \
     critic.ppo_micro_batch_size_per_gpu=16 \
     critic.model.fsdp_config.param_offload=False \
@@ -51,7 +51,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger=['wandb'] \
     trainer.project_name='verl' \
-    trainer.experiment_name='Qwen2.5-7B-math-format-numia' \
+    trainer.experiment_name='qwen_self_corr_warmup_clean_ep1_new_temp' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
