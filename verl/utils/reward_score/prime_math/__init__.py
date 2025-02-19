@@ -334,6 +334,7 @@ def _last_boxed_only_string(string):
 
 def match_answer(response):
     is_matched = False
+    '''
     for ans_marker in ['answer:', "answer is", "answers are"]:
         ans_idx = response.lower().rfind(ans_marker)
         if ans_idx != -1:
@@ -341,7 +342,8 @@ def match_answer(response):
             response = response[ans_idx + len(ans_marker):].strip()
             if response.endswith("\n"):
                 response = response[:-2]
-
+    '''
+    '''
     for ans_marker in ["is answer", "is the answer", "are answers", "are the answers"]:
         ans_idx = response.lower().rfind(ans_marker)
         if ans_idx != -1:
@@ -349,13 +351,13 @@ def match_answer(response):
             response = response[:ans_idx].strip()
             if response.endswith("\n"):
                 response = response[:-2]
-
+    '''
     # Find boxed
     ans_boxed = _last_boxed_only_string(response)
     if ans_boxed:
         is_matched = True
         response = ans_boxed
-
+    '''
     if ". " in response:
         dot_idx = response.lower().rfind(". ")
         if dot_idx != -1:
@@ -371,6 +373,7 @@ def match_answer(response):
 
     is_matched = is_matched if any([c.isdigit() for c in response]) else False  # answer must have a digit
     # Grade
+    '''
     return is_matched, response
 
 
@@ -382,11 +385,14 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
     ground_truth = str(ground_truth)
 
     is_matched, extracted_model_output = match_answer(model_output)
-    format_correctness = "Step 2:" in model_output and "\\box" in model_output
-
+    #format_correctness = "Step 2:" in model_output and "\\box" in model_output
+    if 'boxed' not in model_output:
+        format_correctness = False
+    else:
+        format_correctness = True
     # grade simple algebra questions. if succeeded, return; otherwise, proceed to more complex grading
     if grade_answer(extracted_model_output, ground_truth):
-        return True, True, extracted_model_output
+        return 1.0 #True, True, extracted_model_output
 
     try:
         if "\pi" in extracted_model_output or "\pi" in ground_truth:
@@ -398,5 +404,12 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
             is_correct = math_equal(extracted_model_output, ground_truth, timeout=True)
     except:
         is_correct = False
-
-    return is_correct, format_correctness, extracted_model_output
+    format_correctness = True
+    if not format_correctness:
+        return -1.0
+    elif is_correct:
+        return 1.0
+    else:
+        return 0#-0.5
+    #return float(is_correct)
+    #return is_correct, format_correctness, extracted_model_output
