@@ -44,15 +44,7 @@ if __name__ == '__main__':
                 
             data = {
                 "data_source": 'DigitalLearningGmbH/MATH-lighteval',
-                "prompt": [
-                    {
-                    "role": "system",
-                 "content": z
-                },
-                    {
-                    "role": "user",
-                    "content": question
-                }],
+                "prompt": example['prompt_messages'],
                 "ability": "math",
                 "reward_model": example['reward_model'],
                 "extra_info": {
