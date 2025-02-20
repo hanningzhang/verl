@@ -332,6 +332,36 @@ def _last_boxed_only_string(string):
     return string[left_brace_idx + 1:right_brace_idx].strip()
 
 
+def _first_boxed_only_string(string):
+    idx = string.find("\\boxed")
+    if idx < 0:
+        idx = string.find("\\fbox")
+        if idx < 0:
+            return None
+
+    i = idx
+    left_brace_idx = None
+    right_brace_idx = None
+    num_left_braces_open = 0
+    while i < len(string):
+        if string[i] == "{":
+            num_left_braces_open += 1
+            if left_brace_idx is None:
+                left_brace_idx = i
+        elif string[i] == "}":
+            num_left_braces_open -= 1
+            if num_left_braces_open == 0:
+                right_brace_idx = i
+                break
+
+        i += 1
+
+    if left_brace_idx is None or right_brace_idx is None:
+        return None
+
+    return string[left_brace_idx + 1:right_brace_idx].strip()
+
+
 def match_answer(response):
     is_matched = False
     '''
@@ -376,6 +406,50 @@ def match_answer(response):
     '''
     return is_matched, response
 
+def match_first_answer(response):
+    is_matched = False
+    '''
+    for ans_marker in ['answer:', "answer is", "answers are"]:
+        ans_idx = response.lower().rfind(ans_marker)
+        if ans_idx != -1:
+            is_matched = True
+            response = response[ans_idx + len(ans_marker):].strip()
+            if response.endswith("\n"):
+                response = response[:-2]
+    '''
+    '''
+    for ans_marker in ["is answer", "is the answer", "are answers", "are the answers"]:
+        ans_idx = response.lower().rfind(ans_marker)
+        if ans_idx != -1:
+            is_matched = True
+            response = response[:ans_idx].strip()
+            if response.endswith("\n"):
+                response = response[:-2]
+    '''
+    # Find boxed
+    ans_boxed = _first_boxed_only_string(response)
+    if ans_boxed:
+        is_matched = True
+        response = ans_boxed
+    '''
+    if ". " in response:
+        dot_idx = response.lower().rfind(". ")
+        if dot_idx != -1:
+            response = response[:dot_idx].strip()
+
+    for ans_marker in ['be ', "is ", "are ", "=", ": ", "get ", 'be\n', "is\n", "are\n", ":\n", "get\n"]:
+        ans_idx = response.lower().rfind(ans_marker)
+        if ans_idx != -1:
+            is_matched = True
+            response = response[ans_idx + len(ans_marker):].strip()
+            if response.endswith("\n"):
+                response = response[:-2]
+
+    is_matched = is_matched if any([c.isdigit() for c in response]) else False  # answer must have a digit
+    # Grade
+    '''
+    return is_matched, response
+
 
 import math
 
@@ -385,14 +459,19 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
     ground_truth = str(ground_truth)
 
     is_matched, extracted_model_output = match_answer(model_output)
+    is_first_matched, extracted_first_model_output = match_first_answer(model_output)
     #format_correctness = "Step 2:" in model_output and "\\box" in model_output
     if 'boxed' not in model_output:
         format_correctness = False
     else:
         format_correctness = True
     # grade simple algebra questions. if succeeded, return; otherwise, proceed to more complex grading
-    if grade_answer(extracted_model_output, ground_truth):
-        return 1.0 #True, True, extracted_model_output
+    final_grade = grade_answer(extracted_model_output, ground_truth)
+    first_grade = grade_answer(extracted_first_model_output, ground_truth)
+    # if grade_answer(extracted_model_output, ground_truth):
+    #     return 1.0 #True, True, extracted_model_output
+    if (not first_grade) and final_grade:
+        return 1.5
 
     try:
         if "\pi" in extracted_model_output or "\pi" in ground_truth:
@@ -404,9 +483,23 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
             is_correct = math_equal(extracted_model_output, ground_truth, timeout=True)
     except:
         is_correct = False
+        
+    try:
+        if "\pi" in extracted_first_model_output or "\pi" in ground_truth:
+            equivs = []
+            for pi in [math.pi, 3.14]:
+                equivs.append(math_equal(extracted_first_model_output, ground_truth, timeout=True, pi=pi))
+            is_first_correct = any(equivs)
+        else:
+            is_first_correct = math_equal(extracted_first_model_output, ground_truth, timeout=True)
+    except:
+        is_first_correct = False
+        
     format_correctness = True
     if not format_correctness:
         return -1.0
+    elif (not is_first_correct) and is_correct:
+        return 1.5
     elif is_correct:
         return 1.0
     else:

@@ -1,5 +1,5 @@
 set -x
-HOME="/home/wx13"
+HOME="/home/hanning"
 train_path=$HOME/data/numia_math/train.parquet
 test_path=$HOME/data/numia_math/test.parquet
 
