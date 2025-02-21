@@ -23,11 +23,452 @@ import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
-from . import math_normalize
-from .grader import math_equal
+# from . import math_normalize
+# from .grader import math_equal
 
-# import math_normalize
-# from grader import math_equal
+import math_normalize
+from grader import math_equal
+
+import re
+from typing import Optional
+
+
+def normalize_answer(answer: Optional[str]) -> Optional[str]:
+    if answer is None:
+        return None
+    answer = answer.strip()
+    try:
+        # Remove enclosing `\text{}`.
+        m = re.search("^\\\\text\{(?P<text>.+?)\}$", answer)
+        if m is not None:
+            answer = m.group("text").strip()
+        return _strip_string(answer)
+    except:
+        return answer
+
+
+def _fix_fracs(string):
+    substrs = string.split("\\frac")
+    new_str = substrs[0]
+    if len(substrs) > 1:
+        substrs = substrs[1:]
+        for substr in substrs:
+            new_str += "\\frac"
+            if substr[0] == "{":
+                new_str += substr
+            else:
+                try:
+                    assert len(substr) >= 2
+                except:
+                    return string
+                a = substr[0]
+                b = substr[1]
+                if b != "{":
+                    if len(substr) > 2:
+                        post_substr = substr[2:]
+                        new_str += "{" + a + "}{" + b + "}" + post_substr
+                    else:
+                        new_str += "{" + a + "}{" + b + "}"
+                else:
+                    if len(substr) > 2:
+                        post_substr = substr[2:]
+                        new_str += "{" + a + "}" + b + post_substr
+                    else:
+                        new_str += "{" + a + "}" + b
+    string = new_str
+    return string
+
+
+def _fix_a_slash_b(string):
+    if len(string.split("/")) != 2:
+        return string
+    a = string.split("/")[0]
+    b = string.split("/")[1]
+    try:
+        a = int(a)
+        b = int(b)
+        assert string == "{}/{}".format(a, b)
+        new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
+        return new_string
+    except:
+        return string
+
+
+def _remove_right_units(string):
+    # "\\text{ " only ever occurs (at least in the val set) when describing units
+    if "\\text{ " in string:
+        splits = string.split("\\text{ ")
+        assert len(splits) == 2
+        return splits[0]
+    else:
+        return string
+
+
+def _fix_sqrt(string):
+    if "\\sqrt" not in string:
+        return string
+    splits = string.split("\\sqrt")
+    new_string = splits[0]
+    for split in splits[1:]:
+        if split[0] != "{":
+            a = split[0]
+            new_substr = "\\sqrt{" + a + "}" + split[1:]
+        else:
+            new_substr = "\\sqrt" + split
+        new_string += new_substr
+    return new_string
+
+
+def _strip_string(string):
+    # linebreaks
+    string = string.replace("\n", "")
+
+    # remove inverse spaces
+    string = string.replace("\\!", "")
+
+    # replace \\ with \
+    string = string.replace("\\\\", "\\")
+
+    # replace tfrac and dfrac with frac
+    string = string.replace("tfrac", "frac")
+    string = string.replace("dfrac", "frac")
+
+    # remove \left and \right
+    string = string.replace("\\left", "")
+    string = string.replace("\\right", "")
+
+    # Remove circ (degrees)
+    string = string.replace("^{\\circ}", "")
+    string = string.replace("^\\circ", "")
+
+    # remove dollar signs
+    string = string.replace("\\$", "")
+
+    # remove units (on the right)
+    string = _remove_right_units(string)
+
+    # remove percentage
+    string = string.replace("\\%", "")
+    string = string.replace("\%", "")
+
+    # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
+    string = string.replace(" .", " 0.")
+    string = string.replace("{.", "{0.")
+    # if empty, return empty string
+    if len(string) == 0:
+        return string
+    if string[0] == ".":
+        string = "0" + string
+
+    # to consider: get rid of e.g. "k = " or "q = " at beginning
+    if len(string.split("=")) == 2:
+        if len(string.split("=")[0]) <= 2:
+            string = string.split("=")[1]
+
+    # fix sqrt3 --> sqrt{3}
+    string = _fix_sqrt(string)
+
+    # remove spaces
+    string = string.replace(" ", "")
+
+    # \frac1b or \frac12 --> \frac{1}{b} and \frac{1}{2}, etc. Even works with \frac1{72} (but not \frac{72}1). Also does a/b --> \\frac{a}{b}
+    string = _fix_fracs(string)
+
+    # manually change 0.5 --> \frac{1}{2}
+    if string == "0.5":
+        string = "\\frac{1}{2}"
+
+    # NOTE: X/Y changed to \frac{X}{Y} in dataset, but in simple cases fix in case the model output is X/Y
+    string = _fix_a_slash_b(string)
+
+    return string
+
+import contextlib
+import re
+import signal
+import math
+from math import isclose
+from typing import Union
+
+from sympy import N, simplify
+from sympy.parsing.latex import parse_latex
+from sympy.parsing.sympy_parser import parse_expr
+
+
+def is_digit(s):
+    try:
+        if "{,}" in str(s):
+            num = float(str(s).replace("{,}", ""))
+            return True, num
+
+        num = float(str(s).replace(",", ""))
+        return True, num
+    except ValueError:
+        return False, None
+
+
+def normalize(answer, pi) -> str:
+    # checking if answer is $<number> and removing $ in that case to compare
+    if isinstance(answer, str) and bool(re.match(r'\$\d+(\.\d+)?', answer)):
+        return answer[1:]
+
+    # checking if answer is <number>% or <number>\\% and removing %
+    if isinstance(answer, str) and (bool(re.match(r'^\d+(\.\d+)?%$', answer)) or
+                                    bool(re.match(r'^\d+(\.\d+)?\\%$', answer))):
+        return answer.replace("\\%", "").replace("%", "")
+
+    # handle base
+    answer = handle_base(answer)
+
+    # handle pi
+    answer = handle_pi(answer, pi)
+
+    return answer
+
+
+def handle_base(x) -> str:
+    if isinstance(x, str) and "_" in x:
+        # Due to base
+        x = x.split("_")[0]
+        x = float(x)
+        return int(x)
+    return x
+
+
+def handle_pi(string, pi):
+    if isinstance(string, str) and "\pi" in string:
+        # Find the first occurrence of "\pi"
+        idx = string.find("\pi")
+
+        # Iterate over the string and find all occurrences of "\pi" with a valid previous character
+        while idx != -1:
+
+            if idx > 0 and string[idx - 1].isdigit():
+                # Replace "\pi" with "*math.pi" if the previous character is a digit
+                string = string[:idx] + f"*{pi}" + string[idx + 3:]
+            else:
+                # Replace "\pi" with "1*math.pi" if the previous character is not a digit
+                string = string[:idx] + f"1*{pi}" + string[idx + 3:]
+
+            # Find the next occurrence of "\pi"
+            idx = string.find("\pi", idx + 1)
+
+        # Evaluate the expression using eval() function
+        try:
+            string = eval(string)
+        except:
+            pass
+
+    return string
+
+
+def math_equal(prediction: Union[bool, float, str],
+               reference: Union[float, str],
+               include_percentage: bool = True,
+               tolerance: float = 1e-4,
+               timeout: float = 10.0,
+               pi: float = math.pi) -> bool:
+    """
+    Exact match of math if and only if:
+    1. numerical equal: both can convert to float and are equal
+    2. symbolic equal: both can convert to sympy expression and are equal
+    """
+
+    prediction = normalize(prediction, pi)
+    reference = normalize(reference, pi)
+
+    if isinstance(prediction, str) and len(prediction) > 1000:  # handling weird corner-cases
+        prediction = prediction[:1000]
+
+    # 0. string comparison
+    if isinstance(prediction, str) and isinstance(reference, str):
+        if prediction.strip().lower() == reference.strip().lower():
+            return True
+        if prediction.replace(" ", "") == reference.replace(" ", ""):
+            return True
+
+    try:  # 1. numerical equal
+        if is_digit(prediction)[0] and is_digit(reference)[0]:
+            prediction = is_digit(prediction)[1]
+            reference = is_digit(reference)[1]
+            # number questions
+            if include_percentage:
+                gt_result = [reference / 100, reference, reference * 100]
+            else:
+                gt_result = [reference]
+            for item in gt_result:
+                try:
+                    if isclose(item, prediction, rel_tol=tolerance):
+                        return True
+                except Exception:
+                    continue
+            return False
+    except Exception:
+        pass
+
+    if not prediction and prediction not in [0, False]:
+        return False
+
+    # 2. symbolic equal
+    reference = str(reference).strip()
+    prediction = str(prediction).strip()
+
+    ## deal with [], (), {}
+    prediction = format_intervals(prediction)
+
+    pred_str, ref_str = prediction, reference
+    if (prediction.startswith("[") and prediction.endswith("]") and
+            not reference.startswith("(")) or (prediction.startswith("(") and prediction.endswith(")") and
+                                               not reference.startswith("[")):
+        pred_str = pred_str.strip("[]()")
+        ref_str = ref_str.strip("[]()")
+    for s in ["{", "}", "(", ")"]:
+        ref_str = ref_str.replace(s, "")
+        pred_str = pred_str.replace(s, "")
+    if pred_str == ref_str:
+        return True
+
+    ## [a, b] vs. [c, d], return a==c and b==d
+    if (prediction and reference and prediction[0] in "([" and prediction[-1] in ")]" and
+            prediction[0] == reference[0] and prediction[-1] == reference[-1]):
+        pred_parts = prediction[1:-1].split(",")
+        ref_parts = reference[1:-1].split(",")
+        if len(pred_parts) == len(ref_parts):
+            if all([
+                    math_equal(pred_pt, ref_pt, include_percentage, tolerance)
+                    for pred_pt, ref_pt in zip(pred_parts, ref_parts)
+            ]):
+                return True
+
+    if "," in prediction and "," in reference:
+        pred_parts = [item.strip() for item in prediction.split(",")]
+        ref_parts = [item.strip() for item in reference.split(",")]
+
+        if len(pred_parts) == len(ref_parts):
+            if all([
+                    math_equal(pred_parts[i], ref_parts[i], include_percentage, tolerance)
+                    for i in range(len(pred_parts))
+            ]):
+                return True
+            else:
+                return False
+
+    # if we have point == tuple of values
+    if prediction.startswith("Point") and reference[0] == "(" and reference[-1] == ")":
+        pred_parts = prediction[prediction.find("(") + 1:-1].split(",")
+        ref_parts = reference[1:-1].split(",")
+        if len(pred_parts) == len(ref_parts):
+            if all([
+                    math_equal(pred_pt, ref_pt, include_percentage, tolerance)
+                    for pred_pt, ref_pt in zip(pred_parts, ref_parts)
+            ]):
+                return True
+
+    # if reference is a matrix
+    if "\begin{pmatrix}" in reference and prediction.startswith("Matrix"):
+        try:
+            pred_matrix = parse_expr(prediction)
+            ref_matrix_items = reference.split()[1:-1:2]
+            if len(pred_matrix) == len(ref_matrix_items):
+                if all([
+                        math_equal(pred, ref, include_percentage, tolerance)
+                        for ref, pred in zip(ref_matrix_items, pred_matrix)
+                ]):
+                    return True
+        except Exception:
+            pass
+    elif "\begin{pmatrix}" in reference and prediction.startswith("[") and prediction.endswith("]"):
+        if isinstance(eval(prediction), list):
+            try:
+                pred_matrix = eval(prediction)
+                # ref_matrix_items = reference.split()[1:-1:2]
+                ref_matrix_items = reference.lstrip("\\begin{pmatrix}").lstrip("\begin{pmatrix}").rstrip(
+                    "\\end{pmatrix}").rstrip("\end{pmatrix}")
+                ref_matrix_items = ref_matrix_items.split("\\")
+                ref_matrix_items = [row.split("&") if "&" in row else row for row in ref_matrix_items]
+                if len(pred_matrix) == len(ref_matrix_items):
+                    if all([
+                            math_equal(pred, ref, include_percentage, tolerance)
+                            for ref, pred in zip(ref_matrix_items, pred_matrix)
+                    ]):
+                        return True
+            except Exception:
+                pass
+
+    return symbolic_equal(prediction, reference, tolerance, timeout)
+
+
+def symbolic_equal(a, b, tolerance, timeout=10.0):
+
+    def _parse(s):
+        for f in [parse_expr, parse_latex]:
+            try:
+                with time_limit(timeout):
+                    return f(s)
+            except Exception:
+                pass
+        return s
+
+    a = _parse(a)
+    b = _parse(b)
+
+    try:
+        with time_limit(timeout):
+            if simplify(a - b) == 0:
+                return True
+    except Exception:
+        pass
+
+    try:
+        with time_limit(timeout):
+            if isclose(N(a), N(b), rel_tol=tolerance):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+class TimeoutException(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def time_limit(seconds: float):
+
+    def signal_handler(signum, frame):
+        raise TimeoutException("Timed out!")
+
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    signal.signal(signal.SIGALRM, signal_handler)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+def format_intervals(prediction):
+    patterns = {
+        "Interval(": r"^Interval\((.*)\)$",
+        "Interval.Ropen(": r"^Interval\.Ropen\((.*)\)$",
+        "Interval.Lopen(": r"^Interval\.Lopen\((.*)\)$",
+        "Interval.open(": r"^Interval\.open\((.*)\)$",
+    }
+
+    for key, pattern in patterns.items():
+        match = re.match(pattern, prediction)
+        if match:
+            inner_content = match.group(1)
+
+            if key == "Interval(":  # Intarval(a, b) == [a, b]
+                return f"[{inner_content}]"
+            elif key == "Interval.Ropen(":  # Intarval.Ropen(a, b) == [a, b)
+                return f"[{inner_content})"
+            elif key == "Interval.Lopen(":  # Intarval.Lopen(a, b) == (a, b]
+                return f"({inner_content}]"
+            elif key == "Interval.open(":  # Intarval.open(a, b) == (a, b)
+                return f"({inner_content})"
+
+    return prediction
 
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
@@ -333,11 +774,9 @@ def _last_boxed_only_string(string):
 
 
 def _first_boxed_only_string(string):
-    first_idx = string.find("<|im_start|>assistant") + len("<|im_start|>assistant")
-    tmp = string[first_idx:]
-    idx = tmp.find("\\boxed")
+    idx = string.find("\\boxed")
     if idx < 0:
-        idx = tmp.find("\\fbox")
+        idx = string.find("\\fbox")
         if idx < 0:
             return None
 
@@ -345,12 +784,12 @@ def _first_boxed_only_string(string):
     left_brace_idx = None
     right_brace_idx = None
     num_left_braces_open = 0
-    while i < len(tmp):
-        if tmp[i] == "{":
+    while i < len(string):
+        if string[i] == "{":
             num_left_braces_open += 1
             if left_brace_idx is None:
                 left_brace_idx = i
-        elif tmp[i] == "}":
+        elif string[i] == "}":
             num_left_braces_open -= 1
             if num_left_braces_open == 0:
                 right_brace_idx = i
@@ -361,7 +800,7 @@ def _first_boxed_only_string(string):
     if left_brace_idx is None or right_brace_idx is None:
         return None
 
-    return tmp[left_brace_idx + 1:right_brace_idx].strip()
+    return string[left_brace_idx + 1:right_brace_idx].strip()
 
 
 def match_answer(response):
@@ -430,7 +869,7 @@ def match_first_answer(response):
     '''
     # Find boxed
     ans_boxed = _first_boxed_only_string(response)
-    #print("result: " + ans_boxed)
+    print("result: "+ans_boxed)
     if ans_boxed:
         is_matched = True
         response = ans_boxed
@@ -460,7 +899,7 @@ import math
 def compute_score(model_output: str, ground_truth: str) -> bool:
     model_output = str(model_output)
     ground_truth = str(ground_truth)
-    #print(model_output)
+
     is_matched, extracted_model_output = match_answer(model_output)
     is_first_matched, extracted_first_model_output = match_first_answer(model_output)
     #format_correctness = "Step 2:" in model_output and "\\box" in model_output
@@ -502,9 +941,6 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
     #print(is_first_correct)
     #print(is_correct)
     #print("")
-    #print(extracted_first_model_output)
-    #print(extracted_model_output)
-    #print(ground_truth)
     if not format_correctness:
         return -1.0
     elif (not is_first_correct) and is_correct:
@@ -514,7 +950,11 @@ def compute_score(model_output: str, ground_truth: str) -> bool:
         #print("1.0")
         return 1.0
     else:
-        #print("0.0")
         return 0#-0.5
     #return float(is_correct)
     #return is_correct, format_correctness, extracted_model_output
+
+
+test_str = "The final answer is \(\\boxed{\\frac{33}{5}}\). To verify the correctness of the solution, let's re-evaluate the problem step-by-step: 1. The expression \(\frac{x-5}{x^2-9}\) is not defined when the denominator is zero. 2. The denominator \(x^2 - 9\) can be factored as \((x-3)(x+3)\). 3. The expression is not defined when \((x-3)(x+3) = 0\), which happens when \(x = 3\) or \(x = -3\). 4. Therefore, there are 2 values of \(x\) for which the expression is not defined. The final answer is \(\\boxed{\\frac{3}{5}}\)."
+print(match_first_answer(test_str))
+print(compute_score(test_str,"\\frac{3}{5}"))

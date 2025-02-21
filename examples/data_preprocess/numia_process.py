@@ -44,7 +44,7 @@ if __name__ == '__main__':
                 
             data = {
                 "data_source": 'DigitalLearningGmbH/MATH-lighteval',
-                "prompt":                 "prompt": [
+                "prompt":          [
                     {
                     "role": "system",
                  "content": z
